@@ -1033,35 +1033,99 @@ def _run_git(args, cwd=APP_DIR, timeout=30):
         return 124, "", "git command timed out"
 
 
+def _parse_semver(s):
+    """Returns a tuple like (1,0,1) for '1.0.1' / 'v1.0.1' / '1.0.1-rc1'.
+    Returns None if it doesn't look like semver."""
+    if not s:
+        return None
+    s = s.strip().lstrip("vV")
+    s = s.split("-", 1)[0].split("+", 1)[0]  # strip prerelease / build
+    parts = s.split(".")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums[:3])
+
+
+def _latest_remote_tag():
+    """Query the remote for the highest semver tag. Returns (tag_str, semver) or (None, None)."""
+    rc, out, _ = _run_git(["ls-remote", "--tags", "--refs", "origin"])
+    if rc != 0 or not out:
+        return None, None
+    best_tag, best_ver = None, None
+    for line in out.splitlines():
+        # line: "<sha>\trefs/tags/<tag>"
+        parts = line.split("refs/tags/")
+        if len(parts) != 2:
+            continue
+        tag = parts[1].strip()
+        ver = _parse_semver(tag)
+        if ver is None:
+            continue
+        if best_ver is None or ver > best_ver:
+            best_tag, best_ver = tag, ver
+    return best_tag, best_ver
+
+
 def check_updates():
-    """Returns dict: {ok, is_git, behind, current, latest, message}."""
+    """Returns dict: {ok, is_git, behind, current, latest, message}.
+    Compares the local VERSION constant to the highest semver tag on the remote."""
     if not os.path.isdir(os.path.join(APP_DIR, ".git")):
         return {"ok": False, "is_git": False,
                 "message": ("This install is not a git checkout, so the Update "
                             "button can't auto-pull.\n\nReinstall by cloning:\n"
                             f"git clone {REPO_URL}")}
-    rc, _, err = _run_git(["fetch", "--quiet"])
+
+    rc, _, err = _run_git(["fetch", "--tags", "--prune", "--quiet"])
     if rc != 0:
         return {"ok": False, "is_git": True,
                 "message": f"git fetch failed:\n{err or 'unknown error'}"}
-    rc1, local, _ = _run_git(["rev-parse", "HEAD"])
-    rc2, remote, _ = _run_git(["rev-parse", f"origin/{REPO_BRANCH}"])
-    if rc1 != 0 or rc2 != 0:
-        return {"ok": False, "is_git": True,
-                "message": "Could not read git revisions."}
-    if local == remote:
+
+    latest_tag, latest_ver = _latest_remote_tag()
+    local_ver = _parse_semver(VERSION)
+
+    if latest_tag is None or latest_ver is None:
+        # No release tags published — fall back to commit comparison on the branch.
+        rc1, local_sha, _ = _run_git(["rev-parse", "HEAD"])
+        rc2, remote_sha, _ = _run_git(["rev-parse", f"origin/{REPO_BRANCH}"])
+        if rc1 != 0 or rc2 != 0:
+            return {"ok": False, "is_git": True,
+                    "message": "Could not read git revisions."}
+        if local_sha == remote_sha:
+            return {"ok": True, "is_git": True, "behind": 0,
+                    "current": VERSION, "latest": VERSION,
+                    "message": f"You're up to date (v{VERSION}). No release tags published yet."}
+        rc, count, _ = _run_git(
+            ["rev-list", "--count", f"HEAD..origin/{REPO_BRANCH}"])
+        behind = int(count) if rc == 0 and count.isdigit() else 1
+        return {"ok": True, "is_git": True, "behind": behind,
+                "current": VERSION, "latest": f"main@{remote_sha[:7]}",
+                "message": f"{behind} new commit(s) on {REPO_BRANCH} "
+                           f"(no tagged release found)."}
+
+    if local_ver is None:
+        return {"ok": True, "is_git": True, "behind": 1,
+                "current": VERSION, "latest": latest_tag,
+                "message": f"Latest release: v{latest_tag}. Local VERSION "
+                           f"({VERSION!r}) doesn't parse as semver."}
+
+    if latest_ver <= local_ver:
         return {"ok": True, "is_git": True, "behind": 0,
-                "current": local[:7], "latest": remote[:7],
-                "message": "You're up to date."}
-    rc, count, _ = _run_git(["rev-list", "--count", f"HEAD..origin/{REPO_BRANCH}"])
-    behind = int(count) if rc == 0 and count.isdigit() else 1
-    return {"ok": True, "is_git": True, "behind": behind,
-            "current": local[:7], "latest": remote[:7],
-            "message": f"{behind} new commit(s) available "
-                       f"({local[:7]} → {remote[:7]})."}
+                "current": VERSION, "latest": latest_tag,
+                "message": f"You're up to date (v{VERSION}). "
+                           f"Latest release: v{latest_tag}."}
+
+    return {"ok": True, "is_git": True, "behind": 1,
+            "current": VERSION, "latest": latest_tag,
+            "message": f"New version available: v{latest_tag} "
+                       f"(you have v{VERSION})."}
 
 
 def apply_update():
+    """Pull latest commits from the tracked branch (which includes the new tag)."""
     rc, _, err = _run_git(["pull", "--ff-only", "origin", REPO_BRANCH])
     if rc != 0:
         return False, err or "git pull failed"
@@ -1320,8 +1384,7 @@ class TrackerApp:
             messagebox.showinfo("Update", info["message"], parent=self.root)
             return
         if info["behind"] == 0:
-            messagebox.showinfo("Update", f"You're on the latest version (v{VERSION}).",
-                                parent=self.root)
+            messagebox.showinfo("Update", info["message"], parent=self.root)
             return
         if not messagebox.askyesno(
                 "Update available",
