@@ -20,6 +20,7 @@ import tkinter as tk
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "applications.json")
 README_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.md")
+HELP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "HELP.md")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 VERSION = "1.0.0"
@@ -840,6 +841,23 @@ class HelpDialog(Toplevel):
         text.tag_configure("link", foreground=THEME["accent"], underline=True)
         text.tag_configure("hr", foreground=THEME["border"])
         text.tag_configure("muted", foreground=THEME["muted"], font=FONT_SUB)
+        text.tag_configure("quote", foreground=THEME["muted"],
+                           font=("Segoe UI", 10, "italic"),
+                           lmargin1=18, lmargin2=18, spacing1=4, spacing3=4,
+                           background="#f8fafc")
+        # Table tags — monospaced grid
+        text.tag_configure("tbl_head", font=("Consolas", 10, "bold"),
+                           foreground=THEME["text"], background="#e2e8f0",
+                           lmargin1=8, lmargin2=8)
+        text.tag_configure("tbl_sep", font=("Consolas", 10),
+                           foreground=THEME["border"],
+                           lmargin1=8, lmargin2=8)
+        text.tag_configure("tbl_row", font=("Consolas", 10),
+                           foreground=THEME["text"], background=THEME["surface"],
+                           lmargin1=8, lmargin2=8)
+        text.tag_configure("tbl_alt", font=("Consolas", 10),
+                           foreground=THEME["text"], background=THEME["surface_alt"],
+                           lmargin1=8, lmargin2=8)
 
         self._render(text)
         text.configure(state="disabled")
@@ -853,36 +871,52 @@ class HelpDialog(Toplevel):
         ttk.Button(foot, text="Close", command=self.destroy).pack(side=RIGHT)
 
     def _render(self, text):
-        if not os.path.exists(README_FILE):
-            text.insert(END, "README.md not found.\n", "muted")
-            text.insert(END, f"\nExpected at:\n{README_FILE}\n", "muted")
+        # Prefer HELP.md (curated app help); fall back to README.md if missing.
+        path = HELP_FILE if os.path.exists(HELP_FILE) else README_FILE
+        if not os.path.exists(path):
+            text.insert(END, "Help file not found.\n", "muted")
+            text.insert(END, f"\nLooked for:\n  {HELP_FILE}\n  {README_FILE}\n", "muted")
             return
         try:
-            with open(README_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except OSError as e:
-            text.insert(END, f"Failed to read README: {e}\n", "muted")
+            text.insert(END, f"Failed to read help: {e}\n", "muted")
             return
 
         in_code = False
-        for raw in lines:
+        i = 0
+        while i < len(lines):
+            raw = lines[i]
             line = raw.rstrip()
             if line.startswith("```"):
                 in_code = not in_code
                 text.insert(END, "\n")
+                i += 1
                 continue
             if in_code:
                 text.insert(END, line + "\n", "codeblock")
+                i += 1
+                continue
+            # Markdown table: line starts with | and the next line is a |---|---| separator
+            if (line.lstrip().startswith("|")
+                    and i + 1 < len(lines)
+                    and re.match(r"^\s*\|[\s:|-]+\|\s*$", lines[i + 1])):
+                table, consumed = self._collect_table(lines, i)
+                self._render_table(text, table)
+                i += consumed
                 continue
             if not line:
                 text.insert(END, "\n")
-                continue
-            if line.startswith("# "):
+            elif line.startswith("# "):
                 text.insert(END, line[2:] + "\n", "h1")
             elif line.startswith("## "):
                 text.insert(END, line[3:] + "\n", "h2")
             elif line.startswith("### "):
                 text.insert(END, line[4:] + "\n", "h3")
+            elif line.startswith("> "):
+                self._render_inline(text, line[2:].strip(), "quote")
+                text.insert(END, "\n")
             elif re.match(r"^[-*]\s", line):
                 text.insert(END, "  • ", "bullet")
                 self._render_inline(text, line[2:].strip(), "bullet")
@@ -896,6 +930,53 @@ class HelpDialog(Toplevel):
             else:
                 self._render_inline(text, line, None)
                 text.insert(END, "\n")
+            i += 1
+
+    @staticmethod
+    def _split_row(line):
+        s = line.strip()
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|"):
+            s = s[:-1]
+        return [c.strip() for c in s.split("|")]
+
+    def _collect_table(self, lines, start):
+        """Returns (rows, lines_consumed). rows[0] = header, rest = body."""
+        header = self._split_row(lines[start])
+        rows = [header]
+        i = start + 2  # skip header + separator row
+        while i < len(lines) and lines[i].lstrip().startswith("|"):
+            rows.append(self._split_row(lines[i]))
+            i += 1
+        return rows, i - start
+
+    def _render_table(self, text, rows):
+        if not rows:
+            return
+        ncols = max(len(r) for r in rows)
+        rows = [r + [""] * (ncols - len(r)) for r in rows]
+        # column widths from longest plain-text cell
+        widths = [max(len(self._strip_md(r[c])) for r in rows) for c in range(ncols)]
+        widths = [max(w, 4) for w in widths]
+        text.insert(END, "\n")
+        for ridx, row in enumerate(rows):
+            tag = "tbl_head" if ridx == 0 else ("tbl_alt" if ridx % 2 else "tbl_row")
+            line = "  " + " │ ".join(
+                self._strip_md(cell).ljust(widths[c]) for c, cell in enumerate(row)
+            ) + "  "
+            text.insert(END, line + "\n", tag)
+            if ridx == 0:
+                sep = "  " + "─┼─".join("─" * w for w in widths) + "  "
+                text.insert(END, sep + "\n", "tbl_sep")
+        text.insert(END, "\n")
+
+    @staticmethod
+    def _strip_md(s):
+        s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+        s = re.sub(r"`([^`]+)`", r"\1", s)
+        s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+        return s
 
     def _render_inline(self, text, line, base_tag):
         # Process **bold**, `code`, [text](url)
