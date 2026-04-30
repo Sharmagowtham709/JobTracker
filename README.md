@@ -22,6 +22,37 @@ A lightweight, **fully local** desktop CRM for managing your job hunt — writte
 
 ---
 
+---
+
+## Prerequisites
+
+The app is **stdlib-only Python**, so once Python 3.12 is in place there's nothing to `pip install`. On a brand-new Windows machine you need:
+
+| Requirement | Why | Auto-installed by `install.ps1`? |
+|---|---|---|
+| Windows 10/11 | Target OS | — |
+| PowerShell 5+ | Runs the installer | Bundled with Windows |
+| **winget** | Used to fetch Git silently | Bundled with Windows 10 1809+ / 11 |
+| **Git** | Cloning the repo + the in-app **⟳ Update** button | ✅ via winget |
+| **uv** | Manages a private Python 3.12 (won't touch system Python) | ✅ via `astral.sh/uv/install.ps1` |
+| **Python 3.12** | Runtime for `tracker.py` | ✅ via `uv python install 3.12` |
+| Tk/Tkinter | GUI runtime | Bundled with uv-managed CPython |
+| Internet | Initial clone, in-app Update, URL Fetch feature | — |
+
+`install.ps1` is **idempotent** — re-running it on an already-installed machine just refreshes the checkout and re-creates the shortcut.
+
+### Verify prerequisites without installing
+
+The installer doubles as a prerequisite checker. Run it with `-CheckOnly` to inspect the machine without making any changes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1 -CheckOnly
+```
+
+It prints `[PASS]` / `[WARN]` / `[FAIL]` per item plus a summary, and exits non-zero if any **required** item is missing. A full install also runs the same check at the end (skip with `-SkipCheck`).
+
+---
+
 ## Quick Install (Windows)
 
 Open PowerShell and run:
