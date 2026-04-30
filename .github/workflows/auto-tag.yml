@@ -1,0 +1,111 @@
+name: Auto tag release
+
+# Bumps VERSION in tracker.py and pushes a matching git tag
+# whenever a non-release commit lands on main.
+#
+# Bump rules (based on the new commits since the last tag):
+#   - any commit with "BREAKING CHANGE" in the body  -> major
+#   - any commit subject starting with "feat:"        -> minor
+#   - otherwise                                       -> patch
+#
+# The bot's own commit is marked "[skip ci]" so this job won't recurse.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute next version
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Latest semver tag (strip leading 'v' if present); default to 0.0.0
+          last_tag=$(git tag --list --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          if [ -z "$last_tag" ]; then
+            last="0.0.0"
+            range="HEAD"
+          else
+            last="${last_tag#v}"
+            range="${last_tag}..HEAD"
+          fi
+          echo "Last tag: ${last_tag:-<none>}  (parsed: $last)"
+
+          # Inspect commit messages in the new range
+          msgs=$(git log --format='%B%n---' "$range" || true)
+
+          bump="patch"
+          if echo "$msgs" | grep -qE '(^|\n)BREAKING CHANGE'; then
+            bump="major"
+          elif echo "$msgs" | grep -qE '(^|\n)feat(\(.+\))?:'; then
+            bump="minor"
+          fi
+          echo "Bump kind: $bump"
+
+          IFS='.' read -r MA MI PA <<< "$last"
+          case "$bump" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          new="${MA}.${MI}.${PA}"
+          echo "New version: $new"
+
+          if git rev-parse "${new}" >/dev/null 2>&1 || git rev-parse "v${new}" >/dev/null 2>&1; then
+            echo "Tag $new already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "new=$new"   >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump VERSION in tracker.py
+        if: steps.bump.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          new="${{ steps.bump.outputs.new }}"
+          python - <<PY
+          import re, pathlib
+          p = pathlib.Path("tracker.py")
+          src = p.read_text(encoding="utf-8")
+          new_src, n = re.subn(
+              r'^(\s*VERSION\s*=\s*)["\'][^"\']+["\']',
+              r'\g<1>"${new}"',
+              src,
+              count=1,
+              flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit("Could not find VERSION line in tracker.py")
+          p.write_text(new_src, encoding="utf-8")
+          print(f"VERSION updated to ${new}")
+          PY
+
+      - name: Commit, tag, push
+        if: steps.bump.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          new="${{ steps.bump.outputs.new }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tracker.py
+          git commit -m "Release ${new} [skip ci]"
+          git tag "${new}"
+          git push origin HEAD:main
+          git push origin "${new}"
