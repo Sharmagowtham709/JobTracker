@@ -23,7 +23,7 @@ README_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.m
 HELP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "HELP.md")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-VERSION = "1.0.0"
+VERSION = "1.0.5"
 REPO_URL = "https://github.com/Sharmagowtham709/JobTracker"
 REPO_BRANCH = "main"
 
