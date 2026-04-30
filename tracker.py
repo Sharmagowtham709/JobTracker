@@ -1434,8 +1434,12 @@ class TrackerApp:
         if not ok:
             messagebox.showerror("Update failed", result, parent=self.root)
             return
-        # On success, `result` is the new version string parsed from the updated file.
-        new_ver = result
+        # Prefer the tag name (what the user is updating *to*) over the
+        # VERSION constant inside the pulled file — the file constant may
+        # not have been bumped in the released commit.
+        target = info.get("latest")
+        from_disk = _read_version_from_disk()
+        new_ver = target or from_disk or result
         self.version_lbl.config(text=f"v{new_ver}  (restart to apply)")
         self._show_update_success(old_ver, new_ver)
 
