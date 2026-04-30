@@ -27,6 +27,25 @@ VERSION = "1.0.0"
 REPO_URL = "https://github.com/Sharmagowtham709/JobTracker"
 REPO_BRANCH = "main"
 
+# Override file written by the in-app updater so the label survives restarts
+# even when the released commit forgot to bump the VERSION constant above.
+VERSION_OVERRIDE_FILE = os.path.join(APP_DIR, ".version")
+
+
+def _load_version_override():
+    try:
+        with open(VERSION_OVERRIDE_FILE, "r", encoding="utf-8") as f:
+            v = f.read().strip()
+        return v or None
+    except OSError:
+        return None
+
+
+_override = _load_version_override()
+if _override:
+    VERSION = _override
+del _override
+
 # ───────────── Theme ─────────────
 THEME = {
     "bg":         "#f1f5f9",   # window background
@@ -1440,6 +1459,11 @@ class TrackerApp:
         target = info.get("latest")
         from_disk = _read_version_from_disk()
         new_ver = target or from_disk or result
+        try:
+            with open(VERSION_OVERRIDE_FILE, "w", encoding="utf-8") as f:
+                f.write(new_ver)
+        except OSError:
+            pass
         self.version_lbl.config(text=f"v{new_ver}  (restart to apply)")
         self._show_update_success(old_ver, new_ver)
 
