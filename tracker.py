@@ -1125,11 +1125,27 @@ def check_updates():
 
 
 def apply_update():
-    """Pull latest commits from the tracked branch (which includes the new tag)."""
+    """Pull latest commits from the tracked branch (which includes the new tag).
+    Returns (ok, new_version_or_message)."""
     rc, _, err = _run_git(["pull", "--ff-only", "origin", REPO_BRANCH])
     if rc != 0:
         return False, err or "git pull failed"
-    return True, "Updated. Restart the app to load changes."
+    new_ver = _read_version_from_disk() or VERSION
+    return True, new_ver
+
+
+def _read_version_from_disk():
+    """Parse the VERSION constant out of tracker.py on disk (post-pull)."""
+    path = os.path.abspath(__file__)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'^\s*VERSION\s*=\s*["\']([^"\']+)["\']', line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return None
 
 
 # ───────────── Main App ─────────────
@@ -1386,16 +1402,32 @@ class TrackerApp:
         if info["behind"] == 0:
             messagebox.showinfo("Update", info["message"], parent=self.root)
             return
+        old_ver = VERSION
+        target = info.get("latest", "newer version")
         if not messagebox.askyesno(
                 "Update available",
-                f"{info['message']}\n\nPull and update now?",
+                f"{info['message']}\n\n"
+                f"Update from v{old_ver} to v{target}?",
                 parent=self.root):
             return
-        ok, msg = apply_update()
-        if ok:
-            messagebox.showinfo("Updated", msg, parent=self.root)
-        else:
-            messagebox.showerror("Update failed", msg, parent=self.root)
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            ok, result = apply_update()
+        finally:
+            self.root.config(cursor="")
+        if not ok:
+            messagebox.showerror("Update failed", result, parent=self.root)
+            return
+        # On success, `result` is the new version string parsed from the updated file.
+        new_ver = result
+        self.version_lbl.config(text=f"v{new_ver}  (restart to apply)")
+        messagebox.showinfo(
+            "Updated",
+            f"✅ The application has been updated from v{old_ver} to v{new_ver}.\n\n"
+            "Please restart the app to load the new version.",
+            parent=self.root,
+        )
 
     def check_reminders(self):
         now = datetime.now()
