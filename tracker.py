@@ -1134,6 +1134,21 @@ def apply_update():
     return True, new_ver
 
 
+def restart_app(root):
+    """Relaunch this script in a fresh process and exit the current one."""
+    import subprocess, sys
+    script = os.path.abspath(__file__)
+    try:
+        subprocess.Popen([sys.executable, script], cwd=APP_DIR, close_fds=True)
+    except Exception:
+        pass
+    try:
+        root.destroy()
+    except Exception:
+        pass
+    os._exit(0)
+
+
 def _read_version_from_disk():
     """Parse the VERSION constant out of tracker.py on disk (post-pull)."""
     path = os.path.abspath(__file__)
@@ -1422,12 +1437,49 @@ class TrackerApp:
         # On success, `result` is the new version string parsed from the updated file.
         new_ver = result
         self.version_lbl.config(text=f"v{new_ver}  (restart to apply)")
-        messagebox.showinfo(
-            "Updated",
-            f"✅ The application has been updated from v{old_ver} to v{new_ver}.\n\n"
-            "Please restart the app to load the new version.",
-            parent=self.root,
-        )
+        self._show_update_success(old_ver, new_ver)
+
+    def _show_update_success(self, old_ver, new_ver):
+        dlg = Toplevel(self.root)
+        dlg.title("Updated")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        try:
+            dlg.configure(bg=THEME["bg"])
+        except Exception:
+            pass
+
+        body = ttk.Frame(dlg, padding=20)
+        body.pack(fill=BOTH, expand=True)
+
+        if old_ver == new_ver:
+            headline = f"✅ Update pulled (v{new_ver})."
+            sub = ("The pulled code reports the same version "
+                   "(v{0}). If a newer release was expected, the "
+                   "remote commit may not have bumped the VERSION "
+                   "constant in tracker.py.\n\n"
+                   "Restart to load any other changes.").format(new_ver)
+        else:
+            headline = f"✅ Updated from v{old_ver} to v{new_ver}."
+            sub = "Restart the app to load the new version."
+
+        ttk.Label(body, text=headline,
+                  font=("Segoe UI Semibold", 12)).pack(anchor=W)
+        ttk.Label(body, text=sub, style="Muted.TLabel",
+                  wraplength=380, justify=LEFT).pack(anchor=W, pady=(8, 16))
+
+        btns = ttk.Frame(body)
+        btns.pack(fill=X)
+        ttk.Button(btns, text="Later",
+                   command=dlg.destroy).pack(side=RIGHT)
+        ttk.Button(btns, text="🔄 Restart Now", style="Primary.TButton",
+                   command=lambda: restart_app(self.root)).pack(side=RIGHT, padx=(0, 8))
+
+        dlg.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dlg.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dlg.winfo_height()) // 3
+        dlg.geometry(f"+{max(0,x)}+{max(0,y)}")
 
     def check_reminders(self):
         now = datetime.now()
